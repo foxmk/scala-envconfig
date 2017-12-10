@@ -1,9 +1,8 @@
 package com.github.foxmk.envconfig
 
 import scala.annotation.StaticAnnotation
-import scala.collection.immutable
 import scala.reflect.runtime.universe._
-import scala.util.{Failure, Success, Try}
+import scala.util.Try
 
 sealed trait EnvConfigAnnotation                             extends StaticAnnotation
 case class env(name: String, default: Option[String] = None) extends EnvConfigAnnotation
@@ -43,28 +42,33 @@ object ConfigParser {
                       fields = getClassFields(cls).map(annotateField))
   }
 
-  private def getFromEnv(prefix: String,
-                         classDescription: ConfigDescription,
-                         env: Map[String, String]): Try[Seq[Any]] = Try {
-    classDescription.fields.map { f =>
-      f.annotation match {
-        case None => ConfigParser.parse(classDescription.prefix.getOrElse(""), env)
-        case Some(annotation) =>
-          val envName = prefix + classDescription.prefix.getOrElse("") + annotation.name
-          env.get(envName).orElse(annotation.default) match {
-            case Some(value) =>
-              f.tpe match {
-                case t if t =:= typeOf[Int]     => 1
-                case t if t =:= typeOf[Boolean] => value == "true" || value == "yes"
-                case t if t =:= typeOf[String]  => value
-                case _ =>
-                  ConfigParser.parse(classDescription.prefix.getOrElse(""), env)
-              }
-            case None => throw EnvVariableNotFound(envName)
-          }
+  private def getFromEnv(prefix: String, classDescription: ConfigDescription, env: Map[String, String]): Try[Seq[Any]] =
+    Try {
+      classDescription.fields.map { f =>
+        f.annotation match {
+          case None => ConfigParser.parse(classDescription.prefix.getOrElse(""), env)
+          case Some(annotation) =>
+            val envName = prefix + classDescription.prefix.getOrElse("") + annotation.name
+            env.get(envName).orElse(annotation.default) match {
+              case Some(value) =>
+                f.tpe match {
+                  case t if t =:= typeOf[Int]     => 1
+                  case t if t =:= typeOf[Boolean] => value == "true" || value == "yes"
+                  case t if t =:= typeOf[String]  => value
+                  case _ =>
+                    ConfigParser.parse(classDescription.prefix.getOrElse(""), env)
+                }
+              case None =>
+                println(f.annotation)
+                f.annotation match {
+                  case Some(ann) if ann.default.isDefined => ann.default.get
+                  case _                                  => throw EnvVariableNotFound(envName)
+                }
+
+            }
+        }
       }
     }
-  }
 
   private def instantiate[T: TypeTag](args: Any*): Try[T] = Try {
     val mirror = runtimeMirror(getClass.getClassLoader)
@@ -81,10 +85,19 @@ object ConfigParser {
   }
 
   private def getEnvAnnotation(symbol: Symbol): Option[env] = getAnnotation(symbol, typeOf[env]).map { ann =>
-    val fields: immutable.Seq[String] = ann.tree.children.collect {
+    val children = ann.tree.children
+    println(children)
+
+    val name = children.collectFirst {
       case Literal(Constant(value: String)) => value
     }
-    env(name = fields.head, default = fields.tail.headOption)
+
+    val default = children.collectFirst {
+      case Apply(_, Literal(Constant(arg: String)) :: _) => Some(arg)
+      case Select(_, TermName("None"))                   => None
+    }
+
+    env(name = name.getOrElse(throw new RuntimeException), default = default.flatten)
   }
 
   private def getClassFields(cls: ClassSymbol): Seq[Symbol] = {
