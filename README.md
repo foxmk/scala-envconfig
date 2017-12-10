@@ -31,3 +31,8 @@ import com.github.foxmk.envconfig._
 
 val config = ConfigParser.parse[Config](sys.env) 
 ```
+
+## Known limitations
+
+- Config class should be top-level declaration
+- Parameters in `env` annotation should go in defined order (`name` and then `default`)
